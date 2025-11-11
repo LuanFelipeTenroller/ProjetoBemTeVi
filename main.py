@@ -49,7 +49,7 @@ def normalize_face(landmarks):
     return landmarks
 
 def extract_features(image):
-    """Extrai features geométricas mais completas da face para aumentar acurácia."""
+    """Extrai features geométricas avançadas da face."""
     results = face_mesh.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
     if not results.multi_face_landmarks:
         return None
@@ -57,54 +57,83 @@ def extract_features(image):
     landmarks = np.array([[lm.x, lm.y, lm.z] for lm in results.multi_face_landmarks[0].landmark])
     landmarks = normalize_face(landmarks)
 
-    # Pontos principais
     idx = {
-        "left_eye": [33, 133, 159, 145],  # cantos e pálpebras
+        "left_eye": [33, 133, 159, 145],
         "right_eye": [362, 263, 386, 374],
         "nose": [1, 2, 98],
-        "mouth": [61, 291, 78, 308],  # cantos e centro
+        "mouth": [61, 291, 78, 308],
         "chin": [152, 199],
-        "brow_left": [105, 55],
-        "brow_right": [334, 285],
+        "brow_left": [105, 55, 70],
+        "brow_right": [334, 285, 300],
         "cheek_left": [234, 93],
         "cheek_right": [454, 323]
     }
 
     features = []
 
-    # Distâncias entre olhos
+    # Centros e pontos principais
     left_eye_center = np.mean(landmarks[idx["left_eye"]], axis=0)
     right_eye_center = np.mean(landmarks[idx["right_eye"]], axis=0)
-    features.append(distance(left_eye_center, right_eye_center))
-
-    # Distância nariz → queixo
     nose_center = np.mean(landmarks[idx["nose"]], axis=0)
+    mouth_left, mouth_right = landmarks[idx["mouth"][0]], landmarks[idx["mouth"][1]]
+    mouth_top, mouth_bottom = landmarks[idx["mouth"][2]], landmarks[idx["mouth"][3]]
+    brow_left_mid = np.mean(landmarks[idx["brow_left"]], axis=0)
+    brow_right_mid = np.mean(landmarks[idx["brow_right"]], axis=0)
     chin_center = np.mean(landmarks[idx["chin"]], axis=0)
-    features.append(distance(nose_center, chin_center))
 
-    # Largura da boca
-    mouth_width = distance(landmarks[idx["mouth"][0]], landmarks[idx["mouth"][1]])
-    mouth_height = distance(landmarks[idx["mouth"][2]], landmarks[idx["mouth"][3]])
-    features.append(mouth_width)
-    features.append(mouth_height)
-    features.append(mouth_height / (mouth_width + 1e-6))  # razão H/W
+    # ===========================
+    # 📏 Distâncias básicas
+    # ===========================
+    features += [
+        distance(left_eye_center, right_eye_center),
+        distance(nose_center, chin_center),
+        distance(mouth_left, mouth_right),
+        distance(mouth_top, mouth_bottom),
+        distance(left_eye_center, mouth_left),
+        distance(right_eye_center, mouth_right),
+        distance(left_eye_center, mouth_top),
+        distance(right_eye_center, mouth_top),
+        distance(brow_left_mid, left_eye_center),
+        distance(brow_right_mid, right_eye_center),
+        distance(brow_left_mid, mouth_left),
+        distance(brow_right_mid, mouth_right)
+    ]
 
-    # Distâncias sobrancelhas
-    brow_dist = distance(landmarks[idx["brow_left"][0]], landmarks[idx["brow_right"][0]])
-    features.append(brow_dist)
+    # ===========================
+    # 🧭 Ângulos
+    # ===========================
+    features += [
+        angle(left_eye_center, nose_center, right_eye_center),
+        angle(mouth_left, nose_center, mouth_right),
+        angle(brow_left_mid, nose_center, brow_right_mid),
+        angle(nose_center, mouth_top, mouth_bottom),
+        angle(brow_left_mid, left_eye_center, mouth_left),
+        angle(brow_right_mid, right_eye_center, mouth_right)
+    ]
 
-    # Distâncias bochechas
-    cheek_dist = distance(landmarks[idx["cheek_left"][0]], landmarks[idx["cheek_right"][0]])
-    features.append(cheek_dist)
+    # ===========================
+    # 📊 Razões e simetrias
+    # ===========================
+    mouth_ratio = distance(mouth_top, mouth_bottom) / (distance(mouth_left, mouth_right) + 1e-6)
+    eye_ratio = (
+        distance(landmarks[idx["left_eye"][1]], landmarks[idx["left_eye"][3]]) +
+        distance(landmarks[idx["right_eye"][1]], landmarks[idx["right_eye"][3]])
+    ) / (2 * distance(left_eye_center, right_eye_center) + 1e-6)
 
-    # Ângulos principais
-    features.append(angle(left_eye_center, nose_center, right_eye_center))      # olhos
-    features.append(angle(landmarks[idx["mouth"][0]], nose_center, landmarks[idx["mouth"][1]]))  # boca
-    features.append(angle(landmarks[idx["brow_left"][0]], nose_center, landmarks[idx["brow_right"][0]]))  # sobrancelhas
+    brow_eye_ratio = (
+        (distance(brow_left_mid, left_eye_center) + distance(brow_right_mid, right_eye_center)) /
+        (2 * distance(left_eye_center, right_eye_center) + 1e-6)
+    )
 
-    # Distâncias olho → boca (vertical)
-    features.append(distance(left_eye_center, np.mean(landmarks[idx["mouth"][0:2]], axis=0)))
-    features.append(distance(right_eye_center, np.mean(landmarks[idx["mouth"][0:2]], axis=0)))
+    symmetry = abs(distance(left_eye_center, nose_center) - distance(right_eye_center, nose_center))
+    mouth_symmetry = abs(distance(mouth_left, nose_center) - distance(mouth_right, nose_center))
+
+    features += [mouth_ratio, eye_ratio, brow_eye_ratio, symmetry, mouth_symmetry]
+
+
+    left_eye_height = distance(landmarks[idx["left_eye"][2]], landmarks[idx["left_eye"][3]])
+    right_eye_height = distance(landmarks[idx["right_eye"][2]], landmarks[idx["right_eye"][3]])
+    features += [left_eye_height, right_eye_height, (left_eye_height + right_eye_height) / 2]
 
     return np.array(features)
 
@@ -144,16 +173,18 @@ def train_model():
     model = make_pipeline(
         StandardScaler(),
         MLPClassifier(
-            hidden_layer_sizes=(512,256,128),
+            hidden_layer_sizes=(1024, 512, 256),
             activation='relu',
             solver='adam',
-            batch_size=16,
-            max_iter=2000,
-            alpha=0.001,
-            verbose=True,
-            random_state=42,
+            learning_rate_init=0.0003,
+            validation_fraction=0.2,
+            alpha=5e-3,
+            batch_size=64,
+            max_iter=3000,
             early_stopping=True,
-            n_iter_no_change=50
+            n_iter_no_change=50,
+            random_state=42,
+            verbose=True
         )
     )
 
@@ -188,12 +219,14 @@ def realtime():
                 pred = model.predict([features])[0]
                 predictions_buffer.append(pred)
 
-                # Suavização pelo buffer
-                smoothed_pred = mode(predictions_buffer)[0][0]
-                emotion = le.inverse_transform([smoothed_pred])[0]
+                # Suavização pelo buffer com verificação segura
+                if len(predictions_buffer) > 0:
+                    result = mode(predictions_buffer, keepdims=True)
+                    smoothed_pred = result.mode[0]
+                    emotion = le.inverse_transform([smoothed_pred])[0]
 
-                cv2.putText(frame, emotion, (30, 50),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                    cv2.putText(frame, emotion, (30, 50),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
             cv2.imshow("FER - MediaPipe + MLP", frame)
             if cv2.waitKey(1) & 0xFF == 27:  # Esc para sair
