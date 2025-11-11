@@ -9,6 +9,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.neural_network import MLPClassifier
 import mediapipe as mp
+import pandas as pd
 
 # =======================
 # Configurações
@@ -48,7 +49,7 @@ def normalize_face(landmarks):
     return landmarks
 
 def extract_features(image):
-    """Extrai features geométricas da face."""
+    """Extrai features geométricas mais completas da face para aumentar acurácia."""
     results = face_mesh.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
     if not results.multi_face_landmarks:
         return None
@@ -56,24 +57,57 @@ def extract_features(image):
     landmarks = np.array([[lm.x, lm.y, lm.z] for lm in results.multi_face_landmarks[0].landmark])
     landmarks = normalize_face(landmarks)
 
+    # Pontos principais
     idx = {
-        "left_eye": 33, "right_eye": 263,
-        "nose": 1, "mouth_left": 61, "mouth_right": 291,
-        "chin": 199, "brow_left": 105, "brow_right": 334
+        "left_eye": [33, 133, 159, 145],  # cantos e pálpebras
+        "right_eye": [362, 263, 386, 374],
+        "nose": [1, 2, 98],
+        "mouth": [61, 291, 78, 308],  # cantos e centro
+        "chin": [152, 199],
+        "brow_left": [105, 55],
+        "brow_right": [334, 285],
+        "cheek_left": [234, 93],
+        "cheek_right": [454, 323]
     }
 
-    # Distâncias
-    d1 = distance(landmarks[idx["left_eye"]], landmarks[idx["right_eye"]])
-    d2 = distance(landmarks[idx["nose"]], landmarks[idx["chin"]])
-    d3 = distance(landmarks[idx["mouth_left"]], landmarks[idx["mouth_right"]])
-    d4 = distance(landmarks[idx["brow_left"]], landmarks[idx["brow_right"]])
+    features = []
 
-    # Ângulos
-    a1 = angle(landmarks[idx["left_eye"]], landmarks[idx["nose"]], landmarks[idx["right_eye"]])
-    a2 = angle(landmarks[idx["mouth_left"]], landmarks[idx["nose"]], landmarks[idx["mouth_right"]])
-    a3 = angle(landmarks[idx["brow_left"]], landmarks[idx["nose"]], landmarks[idx["brow_right"]])
+    # Distâncias entre olhos
+    left_eye_center = np.mean(landmarks[idx["left_eye"]], axis=0)
+    right_eye_center = np.mean(landmarks[idx["right_eye"]], axis=0)
+    features.append(distance(left_eye_center, right_eye_center))
 
-    return np.array([d1, d2, d3, d4, a1, a2, a3])
+    # Distância nariz → queixo
+    nose_center = np.mean(landmarks[idx["nose"]], axis=0)
+    chin_center = np.mean(landmarks[idx["chin"]], axis=0)
+    features.append(distance(nose_center, chin_center))
+
+    # Largura da boca
+    mouth_width = distance(landmarks[idx["mouth"][0]], landmarks[idx["mouth"][1]])
+    mouth_height = distance(landmarks[idx["mouth"][2]], landmarks[idx["mouth"][3]])
+    features.append(mouth_width)
+    features.append(mouth_height)
+    features.append(mouth_height / (mouth_width + 1e-6))  # razão H/W
+
+    # Distâncias sobrancelhas
+    brow_dist = distance(landmarks[idx["brow_left"][0]], landmarks[idx["brow_right"][0]])
+    features.append(brow_dist)
+
+    # Distâncias bochechas
+    cheek_dist = distance(landmarks[idx["cheek_left"][0]], landmarks[idx["cheek_right"][0]])
+    features.append(cheek_dist)
+
+    # Ângulos principais
+    features.append(angle(left_eye_center, nose_center, right_eye_center))      # olhos
+    features.append(angle(landmarks[idx["mouth"][0]], nose_center, landmarks[idx["mouth"][1]]))  # boca
+    features.append(angle(landmarks[idx["brow_left"][0]], nose_center, landmarks[idx["brow_right"][0]]))  # sobrancelhas
+
+    # Distâncias olho → boca (vertical)
+    features.append(distance(left_eye_center, np.mean(landmarks[idx["mouth"][0:2]], axis=0)))
+    features.append(distance(right_eye_center, np.mean(landmarks[idx["mouth"][0:2]], axis=0)))
+
+    return np.array(features)
+
 
 # =======================
 # Carregamento dos dados
@@ -110,14 +144,16 @@ def train_model():
     model = make_pipeline(
         StandardScaler(),
         MLPClassifier(
-            hidden_layer_sizes=(256, 128),
+            hidden_layer_sizes=(512,256,128),
             activation='relu',
             solver='adam',
             batch_size=16,
-            max_iter=1000,
+            max_iter=2000,
             alpha=0.001,
             verbose=True,
-            random_state=42
+            random_state=42,
+            early_stopping=True,
+            n_iter_no_change=50
         )
     )
 
@@ -167,6 +203,58 @@ def realtime():
     cv2.destroyAllWindows()
 
 # =======================
+# Teste em imagens
+# =======================
+
+def test_images(test_dir):
+    print("📦 Carregando modelo...")
+    model = joblib.load("fer_mlp_model.pkl")
+    le = joblib.load("label_encoder.pkl")
+
+    results = []
+
+    for emotion in os.listdir(test_dir):
+        emotion_path = os.path.join(test_dir, emotion)
+        if not os.path.isdir(emotion_path):
+            continue
+        for img_name in os.listdir(emotion_path):
+            img_path = os.path.join(emotion_path, img_name)
+            img = cv2.imread(img_path)
+            if img is None:
+                continue
+            img = cv2.resize(img, (224, 224))
+            features = extract_features(img)
+            if features is None:
+                results.append({
+                    "image": img_name, 
+                    "true_emotion": emotion, 
+                    "predicted_emotion": "could_not_extract"
+                })
+                continue
+
+            pred = model.predict([features])[0]
+            predicted_emotion = le.inverse_transform([pred])[0]
+            results.append({
+                "image": img_name, 
+                "true_emotion": emotion, 
+                "predicted_emotion": predicted_emotion
+            })
+
+    # Salva resultados
+    df = pd.DataFrame(results)
+    df.to_csv("test_results.csv", index=False)
+    print("✅ Predições salvas em test_results.csv")
+
+    # Calcula acurácia
+    df_valid = df[df["predicted_emotion"] != "could_not_extract"]
+    accuracy = (df_valid["true_emotion"] == df_valid["predicted_emotion"]).mean()
+    print(f"📊 Acurácia: {accuracy*100:.2f}%")
+
+    # Mostra algumas predições
+    print(df_valid.head(10))
+
+
+# =======================
 # Execução principal
 # =======================
 if __name__ == "__main__":
@@ -175,11 +263,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--train", action="store_true", help="Treina o modelo")
     parser.add_argument("--realtime", action="store_true", help="Executa webcam")
+    parser.add_argument("--test", action="store_true", help="Testa imagens da pasta")  # <- adicionado
     args = parser.parse_args()
 
     if args.train:
         train_model()
     elif args.realtime:
         realtime()
+    elif args.test: 
+        test_images(test_dir)
     else:
-        print("Use --train para treinar ou --realtime para rodar a webcam.")
+        print("Use --train para treinar, --realtime para rodar a webcam ou --test para testar imagens.")
+
