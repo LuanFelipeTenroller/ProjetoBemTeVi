@@ -254,10 +254,7 @@ python main.py --test [--model FILE]
 
 ### Criados:
 - ✨ `cli_interface.py` - Interface interativa
-- ✨ `MELHORIAS.md` - Documentação técnica
 - ✨ `GUIA_RAPIDO.md` - Guia de uso
-- ✨ `EXEMPLOS_OUTPUT.md` - Exemplos de output
-- ✨ `README_NOVO.md` - README atualizado
 - ✨ `SUMARIO_MELHORIAS.md` - Este arquivo
 
 ---
@@ -325,19 +322,6 @@ python main.py --test             # Testar
 
 ---
 
-## 📞 Documentação de Referência
-
-Para entender cada aspecto:
-
-- **Suavização Temporal**: Ver `MELHORIAS.md`, seção 1
-- **Features**: Ver `MELHORIAS.md`, seção 2
-- **Modelos**: Ver `MELHORIAS.md`, seção 3
-- **Como Usar**: Ver `GUIA_RAPIDO.md`
-- **Outputs Esperados**: Ver `EXEMPLOS_OUTPUT.md`
-- **Troubleshooting**: Ver `GUIA_RAPIDO.md`, seção "Troubleshooting"
-
----
-
 **Projeto finalizado com sucesso! 🎉**
 
 Todas as 6 solicitações principais foram implementadas:
@@ -346,5 +330,4 @@ Todas as 6 solicitações principais foram implementadas:
 3. ✅ Múltiplos modelos testados
 4. ✅ Filtragem e confiabilidade
 5. ✅ Pipeline melhorado
-6. ✅ (Opcional) Documentação completa
 

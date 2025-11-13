@@ -42,7 +42,7 @@ augmentation_pipeline = A.Compose([
     A.HueSaturationValue(hue_shift_limit=15, sat_shift_limit=25, val_shift_limit=20, p=0.5),
     A.RandomGamma(gamma_limit=(80, 120), p=0.5),
     A.CLAHE(clip_limit=4.0, tile_grid_size=(8,8), p=0.3),
-    A.Cutout(num_holes=8, max_h_size=16, max_w_size=16, fill_value=0, p=0.3)
+    A.CoarseDropout(max_holes=8, max_height=16, max_width=16, fill_value=0, p=0.3),
     A.HorizontalFlip(p=0.5),
     A.Rotate(limit=15, p=0.7),
     A.RandomBrightnessContrast(p=0.5),
